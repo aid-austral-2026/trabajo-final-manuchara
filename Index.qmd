@@ -1,0 +1,706 @@
+---
+title: "TP Final Análisis inteligente de datos - Manuel Chara"
+format:
+  html:
+    embed-resources: true
+editor: visual
+---
+
+## El mundo del petróleo
+
+¿Cómo evolucionaron la producción y el consumo de petróleo en el mundo, y qué diferencias existen entre los países cuando se analizan los valores totales y per cápita?
+
+El trabajo consta de un estudio sobre producción, consumo y desigualdades energéticas entre países.
+
+## 1. Exploración y limpieza de datos
+
+El análisis utiliza cuatro bases de datos que contienen información sobre la producción y el consumo de petróleo por país, tanto en valores totales como per cápita. La unidades son toneladas y toneladas por año por persona dependiendo si el dataset se refiere a producción/consumo total o producción/consumo por persona.
+
+```{r}
+#| include: false
+library(tidyverse)
+
+oil_consumption_per_cap <- read_csv("oil_consumption_per_cap.csv")
+oil_consumption_total <- read_csv("oil_consumption_total.csv")
+oil_production_per_person <- read_csv("oil_production_per_person.csv")
+oil_production_total <- read_csv("oil_production_total.csv")
+
+bases_oil <- list(
+  "Consumo per cápita" = oil_consumption_per_cap,
+  "Consumo total" = oil_consumption_total,
+  "Producción per cápita" = oil_production_per_person,
+  "Producción total" = oil_production_total
+)
+
+```
+
+### 1.2. Exploración inicial
+
+Las bases presentan una estructura similar: cada fila representa un país y las columnas contienen los valores correspondientes a cada año.
+
+La siguiente tabla resume sus dimensiones y cobertura temporal.
+
+```{r}
+#| echo: true
+resumen_bases <- imap_dfr(bases_oil, function(df, indicador) {
+  anios <- as.numeric(names(df)[-(1:2)])
+  
+  tibble(
+    Indicador = indicador,
+    Países = nrow(df),
+    Columnas = ncol(df),
+    `Año inicial` = min(anios),
+    `Año final` = max(anios)
+  )
+})
+
+knitr::kable(resumen_bases)
+```
+
+### 1.3. Valores faltantes
+
+Se identificaron valores faltantes en las cuatro bases. La siguiente tabla muestra su cantidad y proporción respecto del total de observaciones.
+
+```{r}
+resumen_na <- imap_dfr(bases_oil, function(df, indicador) {
+  total_na <- sum(is.na(df))
+  total_valores <- nrow(df) * (ncol(df) - 2)
+  
+  tibble(
+    Indicador = indicador,
+    `Valores faltantes` = total_na,
+    `Porcentaje faltante` = round(total_na / total_valores * 100, 2)
+  )
+})
+
+knitr::kable(resumen_na)
+```
+
+### 1.4. Criterios de limpieza
+
+Como parte de la revisión inicial se verificaron los tipos de datos y la presencia de valores negativos. Las variables geográficas (`geo` y `name`) son de tipo texto, mientras que los valores anuales son numéricos.
+
+Por el momento, se conservarán los valores faltantes y todos los registros originales. Las diferencias de cobertura entre indicadores se tendrán en cuenta al momento de realizar las comparaciones.
+
+### 1.5. Cobertura geográfica
+
+Las bases presentan diferencias en la cantidad de países incluidos. Para identificar estas diferencias, se compara la cobertura geográfica de cada indicador respecto del conjunto total de países disponibles.
+
+```{r}
+resumen_paises <- imap_dfr(bases_oil, function(df, indicador) {
+  incluidos <- nrow(df)
+  no_incluidos <- 91 - incluidos
+  
+  tibble(
+    Indicador = indicador,
+    `Países incluidos` = incluidos,
+    `Países no incluidos` = no_incluidos,
+    `Países totales` = 91
+  )
+})
+
+knitr::kable(resumen_paises)
+```
+
+### **1.7. Criterios de selección del período de análisis**
+
+El análisis de cobertura permite identificar diferencias importantes entre los indicadores. Mientras que las bases de consumo alcanzan una cobertura completa en 1990, las de producción lo hacen posteriormente: en 2012 para producción per cápita y en 2019 para producción total.
+
+También se observa una mejora progresiva en la disponibilidad histórica. En 1965, la cobertura de producción era aproximadamente del 64%, mientras que para 2010 superaba el 96%.
+
+En función de estos resultados, se establecen los siguientes criterios:
+
+- **Evolución histórica de producción y consumo total:** se utilizará el período 1965–2024, conservando los datos disponibles y considerando que los primeros años presentan cobertura parcial.
+
+- **Evolución per cápita:** se utilizará el período 1965–2019, teniendo en cuenta las diferencias de cobertura entre países y años.
+
+- **Comparaciones entre los cuatro indicadores:** se tomará 2019 como año de referencia, ya que es el último año común con cobertura completa en las cuatro bases.
+
+Se conservarán los valores faltantes como `NA`, sin reemplazarlos por cero. Asimismo, no se eliminarán países de las bases originales. Los filtros necesarios se aplicarán únicamente en cada análisis, según la disponibilidad de información.
+
+Con esto podemos cerrar la exploración y limpieza inicial. El siguiente apartado será **1.8. Transformación de los datos**, donde pasaremos las bases de formato ancho a formato largo para poder procesarlos para los gráficos.
+
+### **1.8.1. Conversión a formato largo**
+
+Primero transformamos cada base por separado. Empezamos con consumo per cápita para comprobar que el resultado sea correcto.
+
+```{r}
+consumption_per_cap_long <- oil_consumption_per_cap %>%
+  pivot_longer(
+    cols = -c(geo, name),
+    names_to = "year",
+    values_to = "consumption_per_cap"
+  ) %>%
+  mutate(year = as.integer(year))
+```
+
+## **1.8.2. Transformación de las bases restantes**
+
+Ahora aplicamos el mismo procedimiento a las otras tres bases. Como ya comprobamos que la primera transformación funciona, podemos hacerlo en un único código.
+
+```{r}
+consumption_total_long <- oil_consumption_total %>%
+  pivot_longer(
+    cols = -c(geo, name),
+    names_to = "year",
+    values_to = "consumption_total"
+  ) %>%
+  mutate(year = as.integer(year))
+
+production_per_person_long <- oil_production_per_person %>%
+  pivot_longer(
+    cols = -c(geo, name),
+    names_to = "year",
+    values_to = "production_per_person"
+  ) %>%
+  mutate(year = as.integer(year))
+
+production_total_long <- oil_production_total %>%
+  pivot_longer(
+    cols = -c(geo, name),
+    names_to = "year",
+    values_to = "production_total"
+  ) %>%
+  mutate(year = as.integer(year))
+```
+
+## **1.8.3. Integración de las bases**
+
+La integración se realizará utilizando las columnas comunes `geo`, `name` y `year`. Se incorporará una variable `indicator` para identificar el tipo de medición y una variable `value` para almacenar su valor.
+
+```{r}
+oil_long <- bind_rows(
+  consumption_per_cap_long %>%
+    rename(value = consumption_per_cap) %>%
+    mutate(indicator = "Consumo per cápita"),
+  
+  consumption_total_long %>%
+    rename(value = consumption_total) %>%
+    mutate(indicator = "Consumo total"),
+  
+  production_per_person_long %>%
+    rename(value = production_per_person) %>%
+    mutate(indicator = "Producción per cápita"),
+  
+  production_total_long %>%
+    rename(value = production_total) %>%
+    mutate(indicator = "Producción total")
+) %>%
+  select(geo, name, year, indicator, value)
+```
+
+## **1.9.2. Verificación de valores faltantes**
+
+```{r}
+oil_long %>%
+  summarise(
+    Total_observaciones = n(),
+    Valores_NA =
+      
+  sum(is.na(value)),
+    Valores_disponibles = sum(!is.na(value)),
+    Porcentaje_NA = round(mean(is.na(value)) * 100, 2)
+  ) %>%
+  knitr::kable()
+```
+
+## **1.9.3. Cantidad de registros por indicador**
+
+```{r}
+oil_long %>%
+  group_by(indicator) %>%
+  summarise(
+    Observaciones = n(),
+    Valores_disponibles = sum(!is.na(value)),
+    Valores_faltantes = sum(is.na(value)),
+    .groups = "drop"
+  ) %>%
+  knitr::kable()
+
+```
+
+## **2. Exploración y análisis de datos (EDA)**
+
+### **2.1. Evolución mundial de la producción y el consumo**
+
+El primer objetivo es analizar cómo evolucionaron la producción y el consumo mundial de petróleo a lo largo del tiempo, identificando tendencias, períodos de crecimiento, caídas y posibles diferencias entre ambos indicadores.
+
+Para esto, vamos a utilizar las bases de **producción total** y **consumo total**, ya que permiten analizar la evolución agregada sin que los cambios poblacionales afecten directamente la magnitud observada.
+
+### **2.1.1. Evolución histórica**
+
+Primero calcularemos el total mundial anual de producción y consumo, sumando los valores disponibles para todos los países. También incorporaremos la cantidad de países que reportan información cada año, para poder interpretar la evolución considerando la cobertura de los datos.
+
+```{r}
+resumen_mundial <- oil_long %>%
+  filter(indicator %in% c("Consumo total", "Producción total")) %>%
+  group_by(indicator, year) %>%
+  summarise(
+    total_mundial = sum(value, na.rm = TRUE),
+    paises_con_datos = sum(!is.na(value)),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    total_Gt = total_mundial / 1e9,
+    paises_totales = if_else(
+      indicator == "Consumo total", 77L, 50L
+    ),
+    cobertura = round(paises_con_datos / paises_totales * 100, 1)
+  )
+
+ggplot(resumen_mundial, aes(x = year, y = total_Gt)) +
+  geom_line(linewidth = 0.8, color = "#214F80") +
+  facet_wrap(~indicator, scales = "free_y") +
+  labs(
+    title = "Evolución mundial de la producción y el consumo de petróleo",
+    subtitle = "Valores expresados en gigatoneladas (Gt)",
+    x = "Año",
+    y = "Gigatoneladas (Gt)"
+  ) +
+  scale_y_continuous(
+    labels = function(x) paste0(x, " Gt")
+  ) +
+  theme_minimal()
+```
+
+## **2.1.2. Evolución de la cobertura de datos**
+
+La disponibilidad de información puede afectar la interpretación de las tendencias históricas. Por este motivo, se analiza la proporción de países que presentan datos disponibles para cada año.
+
+```{r}
+ggplot(resumen_mundial, aes(x = year, y = cobertura)) +
+  geom_line(linewidth = 0.8, color = "#D97706") +
+  facet_wrap(~indicator) +
+  labs(
+    title = "Evolución de la cobertura de datos",
+    subtitle = "Porcentaje de países con información disponible",
+    x = "Año",
+    y = "Cobertura (%)"
+  ) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    breaks = seq(0, 100, 20),
+    labels = function(x) paste0(x, "%")
+  ) +
+  theme_minimal()
+```
+
+```{r}
+resumen_mundial %>%
+  filter(year %in% c(1965, 1970, 1980, 1990, 2000, 2010, 2019, 2024)) %>%
+  select(indicator, year, paises_con_datos, cobertura) %>%
+  arrange(indicator, year) %>%
+  knitr::kable()
+```
+
+## **Interpretación de resultados**
+
+La cobertura de los datos presenta diferencias entre los indicadores analizados. El consumo total alcanza una cobertura del 100% a partir de 1990, mientras que la producción total lo hace recién en 2019. Esta diferencia resulta relevante al interpretar las tendencias históricas, ya que una parte de las variaciones observadas en la producción podría estar relacionada con la incorporación progresiva de países con información disponible. Por este motivo, los resultados de los primeros años deben interpretarse con cautela.
+
+## **2.2. Evolución de la producción y el consumo per cápita**
+
+### **2.2.1. Evolución del promedio por país**
+
+Vamos a calcular el promedio anual de toneladas por persona para cada indicador. También incluiremos la cantidad de países con información disponible y su porcentaje de cobertura.
+
+```{r}
+resumen_per_capita <- oil_long %>%
+  filter(indicator %in% c(
+    "Consumo per cápita",
+    "Producción per cápita"
+  )) %>%
+  group_by(indicator, year) %>%
+  summarise(
+    promedio = mean(value, na.rm = TRUE),
+    paises_con_datos = sum(!is.na(value)),
+    paises_totales = n_distinct(geo),
+    cobertura = round(
+      paises_con_datos / paises_totales * 100, 1
+    ),
+    .groups = "drop"
+  )
+
+ggplot(
+  resumen_per_capita,
+  aes(x = year, y = promedio, color = indicator)
+) +
+  geom_line(linewidth = 0.9) +
+  labs(
+    title = "Evolución de la producción y el consumo per cápita",
+    subtitle = "Promedio simple entre países",
+    x = "Año",
+    y = "Toneladas por persona",
+    color = "Indicador"
+  ) +
+  scale_color_manual(
+    values = c(
+      "Consumo per cápita" = "#214F80",
+      "Producción per cápita" = "#D97706"
+    )
+  ) +
+  theme_minimal()
+```
+
+### **2.2.2. Cobertura de los indicadores per cápita**
+
+Al igual que en el análisis anterior, es necesario considerar la disponibilidad de datos para interpretar correctamente las tendencias.
+
+```{r}
+ggplot(
+  resumen_per_capita,
+  aes(x = year, y = cobertura, color = indicator)
+) +
+  geom_line(linewidth = 0.9) +
+  labs(
+    title = "Cobertura de los datos per cápita",
+    x = "Año",
+    y = "Países con datos (%)",
+    color = "Indicador"
+  ) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    breaks = seq(0, 100, 20)
+  ) +
+  theme_minimal()
+```
+
+```{r}
+resumen_per_capita %>%
+  filter(year %in% c(1965, 1970, 1980, 1990, 2000, 2010, 2019)) %>%
+  select(
+    indicator,
+    year,
+    promedio,
+    paises_con_datos,
+    cobertura
+  ) %>%
+  knitr::kable(digits = 2)
+```
+
+**Interpretación:** El consumo per cápita presenta una evolución relativamente estable, mientras que la producción per cápita muestra una tendencia decreciente a lo largo del período analizado. Sin embargo, esta última presenta una mayor variabilidad en la cobertura geográfica y puede estar influenciada por países con niveles de producción muy elevados en relación con su población. Por este motivo, los promedios deben interpretarse considerando tanto la disponibilidad de datos como las diferencias entre países.
+
+## **2.3. Diferencias entre países**
+
+Ahora vamos a pasar del análisis temporal al análisis geográfico. Queremos identificar qué países presentan los mayores niveles de producción y consumo per cápita y observar si existen diferencias importantes entre ellos.
+
+Para mantener una comparación consistente, vamos a utilizar **2019**, último año con cobertura completa en los cuatro indicadores dentro de sus respectivas bases.
+
+### **2.3.1. Ranking de países por consumo y producción per cápita**
+
+Primero generamos dos rankings con los diez países que presentan los valores más elevados en cada indicador.
+
+```{r}
+ranking_per_capita <- oil_long %>%
+  filter(
+    year == 2019,
+    indicator %in% c(
+      "Consumo per cápita",
+      "Producción per cápita"
+    ),
+    !is.na(value)
+  ) %>%
+  group_by(indicator) %>%
+  slice_max(
+    order_by = value,
+    n = 10,
+    with_ties = FALSE
+  ) %>%
+  arrange(indicator, desc(value)) %>%
+  ungroup()
+
+ranking_per_capita %>%
+  select(indicator, name, value) %>%
+  group_by(indicator) %>%
+  mutate(Ranking = row_number()) %>%
+  ungroup() %>%
+  select(indicator, Ranking, name, value) %>%
+  knitr::kable(digits = 2)
+```
+
+```{r}
+ggplot(
+  ranking_per_capita,
+  aes(
+    x = reorder(name, value),
+    y = value,
+    fill = indicator
+  )
+) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  facet_wrap(~indicator, scales = "free_y") +
+  labs(
+    title = "Principales países por producción y consumo per cápita",
+    subtitle = "Año 2019",
+    x = NULL,
+    y = "Toneladas por persona"
+  ) +
+  theme_minimal()
+```
+
+**Interpretación:** En 2019 se observa una importante concentración de países del Golfo Pérsico entre los principales productores y consumidores de petróleo per cápita. Kuwait, Qatar, Emiratos Árabes Unidos y Arabia Saudita aparecen en ambos rankings.
+
+Singapur se destaca como un caso particular, liderando ampliamente el consumo per cápita, con 12,44 toneladas por persona. Este resultado debe interpretarse considerando su actividad de refinación y comercio internacional de petróleo, ya que el consumo registrado no necesariamente representa el consumo final de sus habitantes.
+
+Por otro lado, países como Noruega, Brunei, Libia y Guinea Ecuatorial presentan niveles elevados de producción per cápita, aunque no aparecen entre los principales consumidores.
+
+## **2.3.3. Relación entre producción y consumo per cápita**
+
+**¿Los países que producen más petróleo por habitante también consumen más petróleo por habitante?**
+
+Para responderla, vamos a cruzar ambos indicadores correspondientes a 2019, utilizando únicamente los países que tienen información disponible en los dos.
+
+```{r}
+comparacion_paises <- oil_long %>%
+  filter(
+    year == 2019,
+    indicator %in% c(
+      "Consumo per cápita",
+      "Producción per cápita"
+    )
+  ) %>%
+  select(geo, name, indicator, value) %>%
+  pivot_wider(
+    names_from = indicator,
+    values_from = value
+  ) %>%
+  drop_na()
+
+comparacion_paises <- comparacion_paises %>%
+  rename(
+    consumo = `Consumo per cápita`,
+    produccion = `Producción per cápita`
+  )
+
+ggplot(
+  comparacion_paises,
+  aes(x = consumo, y = produccion)
+) +
+  geom_point(
+    size = 3,
+    alpha = 0.7,
+    color = "#214F80"
+  ) +
+  geom_abline(
+    intercept = 0,
+    slope = 1,
+    linetype = "dashed",
+    color = "#D97706"
+  ) +
+  labs(
+    title = "Producción vs. consumo de petróleo per cápita",
+    subtitle = "Comparación entre países en 2019",
+    x = "Consumo (toneladas por persona)",
+    y = "Producción (toneladas por persona)"
+  ) +
+  theme_minimal()
+```
+
+La comparación entre producción y consumo per cápita muestra una importante dispersión entre países. La mayoría se concentra en niveles relativamente bajos de ambas variables, mientras que algunos países presentan valores de producción per cápita considerablemente superiores a su consumo.
+
+Se identifican países ubicados por encima de la línea de referencia, lo que indica que producen más petróleo por habitante del que consumen. Sin embargo, no se observa visualmente una relación lineal clara entre ambas variables. Esto sugiere que un mayor nivel de producción per cápita no necesariamente está acompañado por un mayor consumo per cápita.
+
+### **2.3.4. Principales países por producción y consumo total**
+
+Hasta ahora comparamos valores por habitante. Ahora vamos a observar qué países tienen los mayores volúmenes absolutos de producción y consumo. Esto permite distinguir entre países que destacan por su consumo o producción per cápita y aquellos que lideran en volumen total.
+
+```{r}
+ranking_total <- oil_long %>%
+  filter(
+    year == 2019,
+    indicator %in% c("Consumo total", "Producción total"),
+    !is.na(value)
+  ) %>%
+  group_by(indicator) %>%
+  slice_max(order_by = value, n = 10, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(
+    value_millones = value / 1e6,
+    name = reorder(name, value)
+  )
+
+ggplot(ranking_total, aes(x = name, y = value_millones)) +
+  geom_col(fill = "#214F80") +
+  coord_flip() +
+  facet_wrap(~indicator, scales = "free") +
+  labs(
+    title = "Principales países productores y consumidores de petróleo",
+    subtitle = "Año 2019",
+    x = NULL,
+    y = "Millones de toneladas"
+  ) +
+  theme_minimal()
+```
+
+**Interpretación:** En 2019, Estados Unidos lideró tanto el consumo como la producción total de petróleo. China se ubicó en segundo lugar en consumo, pero su producción fue considerablemente menor. En cambio, Rusia y Arabia Saudita se destacaron entre los principales productores, con volúmenes de producción muy superiores a su consumo interno.
+
+Esto muestra que los principales consumidores no necesariamente coinciden con los principales productores.
+
+### **2.3.5. Diferencia entre producción y consumo total por país**
+
+Para complementar la comparación entre países, se analiza la diferencia entre la producción y el consumo total de petróleo durante 2019. Se calcula restando el consumo a la producción de cada país. Los valores positivos indican que la producción supera al consumo, mientras que los negativos reflejan una situación inversa. Se identifican los diez países con las mayores diferencias positivas y negativas.
+
+```{r}
+
+diferencias_paises <- oil_long %>%
+  filter(
+    year == 2019,
+    indicator %in% c("Producción total", "Consumo total")
+  ) %>%
+  select(geo, name, indicator, value) %>%
+  pivot_wider(
+    names_from = indicator,
+    values_from = value
+  ) %>%
+  drop_na() %>%
+  mutate(
+    diferencia = `Producción total` - `Consumo total`,
+    diferencia_millones = diferencia / 1e6
+  )
+
+# Seleccionamos los 10 valores más altos y más bajos
+ranking_diferencias <- bind_rows(
+  diferencias_paises %>%
+    slice_max(diferencia, n = 10) %>%
+    mutate(grupo = "Mayor producción que consumo"),
+  
+  diferencias_paises %>%
+    slice_min(diferencia, n = 10) %>%
+    mutate(grupo = "Mayor consumo que producción")
+)
+
+ggplot(
+  ranking_diferencias,
+  aes(x = reorder(name, diferencia), y = diferencia_millones)
+) +
+  geom_col(fill = "#214F80") +
+  coord_flip() +
+  facet_wrap(~grupo, scales = "free_y") +
+  labs(
+    title = "Diferencia entre producción y consumo de petróleo",
+    subtitle = "Principales diferencias por país en 2019",
+    x = NULL,
+    y = "Millones de toneladas"
+  ) +
+  theme_minimal()
+```
+
+### **Interpretación del gráfico 2.3.5**
+
+En 2019, Rusia y Arabia Saudita presentaron las mayores diferencias positivas entre producción y consumo, con aproximadamente 418 y 402 millones de toneladas, respectivamente. También se destacan Irak, Canadá y Emiratos Árabes Unidos.
+
+En el extremo opuesto, China e India registraron las mayores diferencias negativas, seguidas por Estados Unidos. Esto refleja que sus niveles de consumo superaron ampliamente su producción.
+
+En conjunto, los resultados muestran que los principales productores no necesariamente son los países con mayor consumo interno.
+
+**Aclaración metodológica:** esta diferencia representa únicamente la relación entre producción y consumo. No debe interpretarse directamente como exportaciones o importaciones netas, ya que no contempla otros componentes del balance petrolero.
+
+### **2.3.6. Evolución de la participación de los principales productores**
+
+Se analiza la evolución de la participación de los cinco principales países productores de petróleo de 2019 en la producción total registrada. El objetivo es observar cómo cambió su importancia relativa a lo largo del tiempo. Para mejorar la comparabilidad, el análisis se concentra en el período 1990-2019, cuando la cobertura geográfica de los datos es más amplia.
+
+```{r}
+top_productores <- oil_long %>%
+  filter(
+    year == 2019,
+    indicator == "Producción total",
+    !is.na(value)
+  ) %>%
+  slice_max(value, n = 5, with_ties = FALSE) %>%
+  pull(geo)
+
+participacion_productores <- oil_long %>%
+  filter(
+    indicator == "Producción total",
+    year >= 1990,
+    year <= 2019
+  ) %>%
+  group_by(year) %>%
+  mutate(
+    produccion_mundial = sum(value, na.rm = TRUE),
+    participacion = value / produccion_mundial * 100
+  ) %>%
+  ungroup() %>%
+  filter(geo %in% top_productores)
+
+ggplot(
+  participacion_productores,
+  aes(x = year, y = participacion, color = name)
+) +
+  geom_line(linewidth = 0.9) +
+  labs(
+    title = "Participación de los principales productores de petróleo",
+    subtitle = "Porcentaje de la producción total registrada, 1990-2019",
+    x = "Año",
+    y = "Participación (%)",
+    color = "País"
+  ) +
+  theme_minimal()
+```
+
+**Interpretación:** Entre 1990 y 2019, Estados Unidos aumentó notablemente su participación en la producción registrada, pasando del 13,4 % al 17 %, y se convirtió en el principal productor dentro de este grupo. Rusia, en cambio, redujo su participación del 16,6 % al 13 %, aunque mostró una recuperación desde 2000. Arabia Saudita mantuvo una participación relativamente estable, mientras que Canadá e Irak incrementaron gradualmente su peso.
+
+Estos resultados muestran que la composición de los principales productores no permaneció constante a lo largo del período.
+
+### **2.3.7. Evolución de la participación de los principales consumidores**
+
+Se analiza la evolución de la participación de los cinco principales países consumidores de petróleo en 2019 sobre el consumo total registrado. El objetivo es observar cómo cambió el peso relativo de estos países entre 1990 y 2019.
+
+```{r}
+top_consumidores <- oil_long %>%
+  filter(
+    year == 2019,
+    indicator == "Consumo total",
+    !is.na(value)
+  ) %>%
+  slice_max(value, n = 5, with_ties = FALSE) %>%
+  pull(geo)
+
+participacion_consumidores <- oil_long %>%
+  filter(
+    indicator == "Consumo total",
+    year >= 1990,
+    year <= 2019
+  ) %>%
+  group_by(year) %>%
+  mutate(
+    consumo_mundial = sum(value, na.rm = TRUE),
+    participacion = value / consumo_mundial * 100
+  ) %>%
+  ungroup() %>%
+  filter(geo %in% top_consumidores)
+
+ggplot(
+  participacion_consumidores,
+  aes(x = year, y = participacion, color = name)
+) +
+  geom_line(linewidth = 0.9) +
+  labs(
+    title = "Participación de los principales consumidores de petróleo",
+    subtitle = "Porcentaje del consumo total registrado, 1990-2019",
+    x = "Año",
+    y = "Participación (%)",
+    color = "País"
+  ) +
+  theme_minimal()
+```
+
+### **Interpretación** 
+
+Entre 1990 y 2019, China incrementó considerablemente su participación en el consumo total registrado, pasando del 3,6 % al 16 %. India también aumentó su participación, del 1,9 % al 5,7 %. En contraste, Japón redujo su peso del 8,2 % al 4,2 %, mientras que Estados Unidos continuó siendo el principal consumidor, aunque su participación descendió del 25,7 % al 20,2 %.
+
+Estos resultados reflejan el creciente peso de los países asiáticos en el consumo mundial de petróleo, especialmente China e India.
+
+## 3. Conclusiones
+
+El análisis de la producción y el consumo mundial de petróleo permitió identificar cambios relevantes en su evolución y en la distribución geográfica de estas actividades.
+
+A nivel global, tanto la producción como el consumo mostraron una tendencia creciente durante el período analizado, aunque en 2020 se observa una caída importante, seguida de una recuperación en los años posteriores.
+
+Al comparar los indicadores per cápita, se encontraron diferencias significativas entre países. Los países del Golfo Pérsico aparecen entre los principales tanto en producción como en consumo por habitante. Sin embargo, los rankings de valores totales muestran una distribución diferente, con Estados Unidos y China entre los principales protagonistas del consumo mundial.
+
+También se observaron cambios en la participación de los principales países. China incrementó notablemente su peso en el consumo mundial entre 1990 y 2019, mientras que Estados Unidos mantuvo el primer lugar, aunque redujo su participación relativa. En producción, Estados Unidos aumentó su participación y Rusia y Arabia Saudita continuaron ocupando posiciones destacadas.
+
+Por último, es importante considerar las limitaciones de los datos: las bases presentan diferencias en cobertura geográfica y temporal, especialmente en los primeros años. Además, los promedios per cápita utilizados corresponden a promedios simples entre países y no están ponderados por población.
+
+En conjunto, el análisis muestra que la producción y el consumo de petróleo presentan patrones geográficos diferentes y que su distribución entre países ha cambiado significativamente a lo largo del tiempo.
