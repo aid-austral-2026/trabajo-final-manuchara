@@ -20,10 +20,10 @@ El análisis utiliza cuatro bases de datos que contienen información sobre la p
 #| include: False
 library(tidyverse)
 
-oil_consumption_per_cap <- read_csv("oil_consumption_per_cap.csv")
-oil_consumption_total <- read_csv("oil_consumption_total.csv")
-oil_production_per_person <- read_csv("oil_production_per_person.csv")
-oil_production_total <- read_csv("oil_production_total.csv")
+oil_consumption_per_cap <- read_csv("data/oil_consumption_per_cap.csv")
+oil_consumption_total <- read_csv("data/oil_consumption_total.csv")
+oil_production_per_person <- read_csv("data/oil_production_per_person.csv")
+oil_production_total <- read_csv("data/oil_production_total.csv")
 
 
 
